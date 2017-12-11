@@ -45,6 +45,9 @@ public class CanalServerWithNetty extends AbstractCanalLifeCycle implements Cana
     }
 
     private CanalServerWithNetty(){
+        /**
+         * 处理链接请求的是Netty，但是真正处理的是embeddedServer
+         */
         this.embeddedServer = CanalServerWithEmbedded.instance();
         this.childGroups = new DefaultChannelGroup();
     }

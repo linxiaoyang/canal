@@ -37,6 +37,8 @@ import com.taobao.tddl.dbsync.binlog.LogEvent;
 
 /**
  * 基于向mysql server复制binlog实现
+ *
+ * 向mysql server复制binlog实现类。该实现类是MySQL使用最多的一种实现方式
  * 
  * <pre>
  * 1. 自身不控制mysql主备切换，由ha机制来控制. 比如接入tddl/cobar/自身心跳包成功率
@@ -77,6 +79,10 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
         return buildMysqlConnection(this.runningInfo);
     }
 
+    /**
+     * 主要是fork一个链接后，与mysql server建立链接
+     * @param connection
+     */
     protected void preDump(ErosaConnection connection) {
         if (!(connection instanceof MysqlConnection)) {
             throw new CanalParseException("Unsupported connection type : " + connection.getClass().getSimpleName());
@@ -374,8 +380,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
             return findAsPerTimestampInSpecificLogFile(mysqlConnection,
                 startTimestamp,
                 endPosition,
-                endPosition.getJournalName(),
-                true);
+                endPosition.getJournalName());
         } else {
             return endPosition;
         }
@@ -386,16 +391,10 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
         if (tableMetaTSDB != null && (fixedPosition.getTimestamp() == null || fixedPosition.getTimestamp() <= 0)) {
             // 使用一个未来极大的时间，基于位点进行定位
             long startTimestamp = System.currentTimeMillis() + 102L * 365 * 24 * 3600 * 1000; // 当前时间的未来102年
-            EntryPosition entryPosition = findAsPerTimestampInSpecificLogFile(mysqlConnection,
+            return findAsPerTimestampInSpecificLogFile(mysqlConnection,
                 startTimestamp,
                 fixedPosition,
-                fixedPosition.getJournalName(),
-                true);
-            if (entryPosition == null) {
-                throw new CanalParseException("[fixed timestamp] can't found begin/commit position before with fixed position"
-                                              + fixedPosition.getJournalName() + ":" + fixedPosition.getPosition());
-            }
-            return entryPosition;
+                fixedPosition.getJournalName());
         } else {
             return fixedPosition;
         }
@@ -448,8 +447,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                             specificLogFilePosition = findAsPerTimestampInSpecificLogFile(mysqlConnection,
                                 entryPosition.getTimestamp(),
                                 endPosition,
-                                entryPosition.getJournalName(),
-                                true);
+                                entryPosition.getJournalName());
                         }
                     }
 
@@ -593,8 +591,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                 EntryPosition entryPosition = findAsPerTimestampInSpecificLogFile(mysqlConnection,
                     startTimestamp,
                     endPosition,
-                    startSearchBinlogFile,
-                    false);
+                    startSearchBinlogFile);
                 if (entryPosition == null) {
                     if (StringUtils.equalsIgnoreCase(minBinlogFileName, startSearchBinlogFile)) {
                         // 已经找到最早的一个binlog，没必要往前找了
@@ -742,8 +739,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
     private EntryPosition findAsPerTimestampInSpecificLogFile(MysqlConnection mysqlConnection,
                                                               final Long startTimestamp,
                                                               final EntryPosition endPosition,
-                                                              final String searchBinlogFile,
-                                                              final Boolean justForPositionTimestamp) {
+                                                              final String searchBinlogFile) {
 
         final LogPosition logPosition = new LogPosition();
         try {
@@ -757,15 +753,6 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                     EntryPosition entryPosition = null;
                     try {
                         CanalEntry.Entry entry = parseAndProfilingIfNecessary(event, true);
-                        if (justForPositionTimestamp && logPosition.getPostion() == null && event.getWhen() > 0) {
-                            // 初始位点
-                            entryPosition = new EntryPosition(searchBinlogFile,
-                                event.getLogPos(),
-                                event.getWhen() * 1000,
-                                event.getServerId());
-                            logPosition.setPostion(entryPosition);
-                        }
-
                         if (entry == null) {
                             return true;
                         }
@@ -777,10 +764,8 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
 
                         if (CanalEntry.EntryType.TRANSACTIONBEGIN.equals(entry.getEntryType())
                             || CanalEntry.EntryType.TRANSACTIONEND.equals(entry.getEntryType())) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("compare exit condition:{},{},{}, startTimestamp={}...", new Object[] {
-                                        logfilename, logfileoffset, logposTimestamp, startTimestamp });
-                            }
+                            logger.debug("compare exit condition:{},{},{}, startTimestamp={}...", new Object[] {
+                                    logfilename, logfileoffset, logposTimestamp, startTimestamp });
                             // 事务头和尾寻找第一条记录时间戳，如果最小的一条记录都不满足条件，可直接退出
                             if (logposTimestamp >= startTimestamp) {
                                 return false;
@@ -788,7 +773,7 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                         }
 
                         if (StringUtils.equals(endPosition.getJournalName(), logfilename)
-                            && endPosition.getPosition() < logfileoffset) {
+                            && endPosition.getPosition() <= logfileoffset) {
                             return false;
                         }
 
@@ -797,18 +782,14 @@ public class MysqlEventParser extends AbstractMysqlEventParser implements CanalE
                         // data.length，代表该事务的下一条offest，避免多余的事务重复
                         if (CanalEntry.EntryType.TRANSACTIONEND.equals(entry.getEntryType())) {
                             entryPosition = new EntryPosition(logfilename, logfileoffset, logposTimestamp, serverId);
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("set {} to be pending start position before finding another proper one...",
-                                    entryPosition);
-                            }
+                            logger.debug("set {} to be pending start position before finding another proper one...",
+                                entryPosition);
                             logPosition.setPostion(entryPosition);
                         } else if (CanalEntry.EntryType.TRANSACTIONBEGIN.equals(entry.getEntryType())) {
                             // 当前事务开始位点
                             entryPosition = new EntryPosition(logfilename, logfileoffset, logposTimestamp, serverId);
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("set {} to be pending start position before finding another proper one...",
-                                    entryPosition);
-                            }
+                            logger.debug("set {} to be pending start position before finding another proper one...",
+                                entryPosition);
                             logPosition.setPostion(entryPosition);
                         }
 

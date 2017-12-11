@@ -8,6 +8,8 @@ import com.alibaba.otter.canal.parse.CanalEventParser;
 
 /**
  * 组合多个EventParser进行合并处理，group只是做为一个delegate处理
+ *
+ * 合多个EventParser进行合并处理，group只是做为一个delegate处理。它是一个组合模式的实现
  * 
  * @author jianghang 2012-10-16 上午11:23:14
  * @version 1.0.0

@@ -43,35 +43,40 @@ import com.google.common.collect.MigrateMap;
 
 /**
  * canal调度控制器
- * 
+ *
  * @author jianghang 2012-11-8 下午12:03:11
  * @version 1.0.0
  */
 public class CanalController {
 
-    private static final Logger                      logger   = LoggerFactory.getLogger(CanalController.class);
-    private Long                                     cid;
-    private String                                   ip;
-    private int                                      port;
+    private static final Logger logger = LoggerFactory.getLogger(CanalController.class);
+    private Long cid;
+    private String ip;
+    private int port;
     // 默认使用spring的方式载入
-    private Map<String, InstanceConfig>              instanceConfigs;
-    private InstanceConfig                           globalInstanceConfig;
-    private Map<String, CanalConfigClient>           managerClients;
+    private Map<String, InstanceConfig> instanceConfigs;
+    private InstanceConfig globalInstanceConfig;
+    private Map<String, CanalConfigClient> managerClients;
     // 监听instance config的变化
-    private boolean                                  autoScan = true;
-    private InstanceAction                           defaultAction;
+    private boolean autoScan = true;
+    private InstanceAction defaultAction;
     private Map<InstanceMode, InstanceConfigMonitor> instanceConfigMonitors;
-    private CanalServerWithEmbedded                  embededCanalServer;
-    private CanalServerWithNetty                     canalServer;
+    private CanalServerWithEmbedded embededCanalServer;
+    private CanalServerWithNetty canalServer;
 
-    private CanalInstanceGenerator                   instanceGenerator;
-    private ZkClientx                                zkclientx;
+    private CanalInstanceGenerator instanceGenerator;
+    private ZkClientx zkclientx;
 
-    public CanalController(){
+    public CanalController() {
         this(System.getProperties());
     }
 
-    public CanalController(final Properties properties){
+    /**
+     * 入参是canal.prperties的加载的数据
+     *
+     * @param properties
+     */
+    public CanalController(final Properties properties) {
         managerClients = MigrateMap.makeComputingMap(new Function<String, CanalConfigClient>() {
 
             public CanalConfigClient apply(String managerAddress) {
@@ -86,11 +91,29 @@ public class CanalController {
         initInstanceConfig(properties);
 
         // 准备canal server
+        /**
+         * canal.id= 1
+         */
         cid = Long.valueOf(getProperty(properties, CanalConstants.CANAL_ID));
+        /**
+         * canal.ip=
+         */
         ip = getProperty(properties, CanalConstants.CANAL_IP);
+        /**
+         * canal.port= 11111
+         */
         port = Integer.valueOf(getProperty(properties, CanalConstants.CANAL_PORT));
+        /**
+         * 嵌入式 canal server 实例（单例模式）
+         */
         embededCanalServer = CanalServerWithEmbedded.instance();
-        embededCanalServer.setCanalInstanceGenerator(instanceGenerator);// 设置自定义的instanceGenerator
+        /**
+         * 设置自定义的instanceGenerator
+         */
+        embededCanalServer.setCanalInstanceGenerator(instanceGenerator);
+        /**
+         * netty canal server 真实的server （单例模式）
+         */
         canalServer = CanalServerWithNetty.instance();
         canalServer.setIp(ip);
         canalServer.setPort(port);
@@ -99,7 +122,13 @@ public class CanalController {
         if (StringUtils.isEmpty(ip)) {
             ip = AddressUtils.getHostIp();
         }
+        /**
+         * canal.zkServers=
+         */
         final String zkServers = getProperty(properties, CanalConstants.CANAL_ZKSERVERS);
+        /**
+         * 如果不为空，那个初始化zk client
+         */
         if (StringUtils.isNotEmpty(zkServers)) {
             zkclientx = ZkClientx.getZkClient(zkServers);
             // 初始化系统目录
@@ -107,8 +136,15 @@ public class CanalController {
             zkclientx.createPersistent(ZookeeperPathUtils.CANAL_CLUSTER_ROOT_NODE, true);
         }
 
+        /**
+         * 服务端running状态信息
+         */
         final ServerRunningData serverData = new ServerRunningData(cid, ip + ":" + port);
+
         ServerRunningMonitors.setServerData(serverData);
+        /**
+         * MigrateMap.makeComputingMap 不存在就根据key来进行创建
+         */
         ServerRunningMonitors.setRunningMonitors(MigrateMap.makeComputingMap(new Function<String, ServerRunningMonitor>() {
 
             public ServerRunningMonitor apply(final String destination) {
@@ -138,7 +174,7 @@ public class CanalController {
                         try {
                             if (zkclientx != null) {
                                 final String path = ZookeeperPathUtils.getDestinationClusterNode(destination, ip + ":"
-                                                                                                              + port);
+                                        + port);
                                 initCid(path);
                                 zkclientx.subscribeStateChanges(new IZkStateListener() {
 
@@ -166,7 +202,7 @@ public class CanalController {
                             MDC.put(CanalConstants.MDC_DESTINATION, String.valueOf(destination));
                             if (zkclientx != null) {
                                 final String path = ZookeeperPathUtils.getDestinationClusterNode(destination, ip + ":"
-                                                                                                              + port);
+                                        + port);
                                 releaseCid(path);
                             }
                         } finally {
@@ -185,6 +221,9 @@ public class CanalController {
         }));
 
         // 初始化monitor机制
+        /**
+         * canal.auto.scan = true
+         */
         autoScan = BooleanUtils.toBoolean(getProperty(properties, CanalConstants.CANAL_AUTO_SCAN));
         if (autoScan) {
             defaultAction = new InstanceAction() {
@@ -228,6 +267,9 @@ public class CanalController {
             instanceConfigMonitors = MigrateMap.makeComputingMap(new Function<InstanceMode, InstanceConfigMonitor>() {
 
                 public InstanceConfigMonitor apply(InstanceMode mode) {
+                    /**
+                     * canal.auto.scan.interval = 5
+                     */
                     int scanInterval = Integer.valueOf(getProperty(properties, CanalConstants.CANAL_AUTO_SCAN_INTERVAL));
 
                     if (mode.isSpring()) {
@@ -257,47 +299,88 @@ public class CanalController {
         }
     }
 
+    /**
+     * 初始化全局配置
+     *
+     * @param properties
+     * @return
+     */
     private InstanceConfig initGlobalConfig(Properties properties) {
         InstanceConfig globalConfig = new InstanceConfig();
+        /**
+         * canal.instance.global.mode = spring
+         */
         String modeStr = getProperty(properties, CanalConstants.getInstanceModeKey(CanalConstants.GLOBAL_NAME));
         if (StringUtils.isNotEmpty(modeStr)) {
             globalConfig.setMode(InstanceMode.valueOf(StringUtils.upperCase(modeStr)));
         }
-
+        /**
+         * canal.instance.global.lazy = false
+         */
         String lazyStr = getProperty(properties, CanalConstants.getInstancLazyKey(CanalConstants.GLOBAL_NAME));
         if (StringUtils.isNotEmpty(lazyStr)) {
             globalConfig.setLazy(Boolean.valueOf(lazyStr));
         }
-
+        /**
+         * canal.instance.global.manager.address = 127.0.0.1:1099
+         */
         String managerAddress = getProperty(properties,
-            CanalConstants.getInstanceManagerAddressKey(CanalConstants.GLOBAL_NAME));
+                CanalConstants.getInstanceManagerAddressKey(CanalConstants.GLOBAL_NAME));
         if (StringUtils.isNotEmpty(managerAddress)) {
             globalConfig.setManagerAddress(managerAddress);
         }
-
+        /**
+         * canal.instance.global.spring.xml = classpath:spring/file-instance.xml
+         */
         String springXml = getProperty(properties, CanalConstants.getInstancSpringXmlKey(CanalConstants.GLOBAL_NAME));
         if (StringUtils.isNotEmpty(springXml)) {
             globalConfig.setSpringXml(springXml);
         }
 
+        /**
+         * canal 实例生成器
+         */
         instanceGenerator = new CanalInstanceGenerator() {
 
+            /**
+             * 根据"目标(destination)"创建canal的实例
+             * @param destination
+             * @return
+             */
             public CanalInstance generate(String destination) {
                 InstanceConfig config = instanceConfigs.get(destination);
                 if (config == null) {
                     throw new CanalServerException("can't find destination:{}");
                 }
 
+                /**
+                 * 判断配置信息的模式如果是管理模式
+                 */
                 if (config.getMode().isManager()) {
                     ManagerCanalInstanceGenerator instanceGenerator = new ManagerCanalInstanceGenerator();
+                    /**
+                     * 根据管理者的地址获取管理的客户端
+                     */
                     instanceGenerator.setCanalConfigClient(managerClients.get(config.getManagerAddress()));
+                    /**
+                     *
+                     */
                     return instanceGenerator.generate(destination);
-                } else if (config.getMode().isSpring()) {
+                }
+                /**
+                 * 如果是spring
+                 */
+                else if (config.getMode().isSpring()) {
                     SpringCanalInstanceGenerator instanceGenerator = new SpringCanalInstanceGenerator();
                     synchronized (this) {
                         try {
-                            // 设置当前正在加载的通道，加载spring查找文件时会用到该变量
+                            /**
+                             * 设置当前正在加载的通道，加载spring查找文件时会用到该变量
+                             */
                             System.setProperty(CanalConstants.CANAL_DESTINATION_PROPERTY, destination);
+                            /**
+                             * 根据配置文件的地址设置BeanFactory
+                             */
                             instanceGenerator.setBeanFactory(getBeanFactory(config.getSpringXml()));
                             return instanceGenerator.generate(destination);
                         } catch (Throwable e) {
@@ -328,21 +411,34 @@ public class CanalController {
     }
 
     private void initInstanceConfig(Properties properties) {
+        /**
+         * canal.destinations= example
+         */
         String destinationStr = getProperty(properties, CanalConstants.CANAL_DESTINATIONS);
+        /**
+         * 可以按照","进行分割成数组
+         */
         String[] destinations = StringUtils.split(destinationStr, CanalConstants.CANAL_DESTINATION_SPLIT);
 
         for (String destination : destinations) {
             InstanceConfig config = parseInstanceConfig(properties, destination);
+            /**
+             * put data
+             */
             InstanceConfig oldConfig = instanceConfigs.put(destination, config);
 
             if (oldConfig != null) {
-                logger.warn("destination:{} old config:{} has replace by new config:{}", new Object[] { destination,
-                        oldConfig, config });
+                logger.warn("destination:{} old config:{} has replace by new config:{}", new Object[]{destination,
+                        oldConfig, config});
             }
         }
     }
 
     private InstanceConfig parseInstanceConfig(Properties properties, String destination) {
+        /**
+         * 利用globalInstanceConfig来初始化实例的配置信息InstanceConfig。
+         * 如果实例的配置信息未配置就是用全局配置
+         */
         InstanceConfig config = new InstanceConfig(globalInstanceConfig);
         String modeStr = getProperty(properties, CanalConstants.getInstanceModeKey(destination));
         if (!StringUtils.isEmpty(modeStr)) {
@@ -376,6 +472,9 @@ public class CanalController {
     public void start() throws Throwable {
         logger.info("## start the canal server[{}:{}]", ip, port);
         // 创建整个canal的工作节点
+        /**
+         * /otter/canal/cluster/192.168.197.249:11111
+         */
         final String path = ZookeeperPathUtils.getCanalClusterNode(ip + ":" + port);
         initCid(path);
         if (zkclientx != null) {

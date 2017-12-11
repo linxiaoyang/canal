@@ -15,6 +15,10 @@ import com.alibaba.otter.canal.parse.inbound.mysql.tsdb.TableMetaTSDB;
 import com.alibaba.otter.canal.parse.inbound.mysql.tsdb.TableMetaTSDBBuilder;
 import com.alibaba.otter.canal.protocol.position.EntryPosition;
 
+
+/**
+ * 抽象的MySQL日志复制控制器的模板类。共享了MySQL的日志复制控制实现
+ */
 public abstract class AbstractMysqlEventParser extends AbstractEventParser {
 
     protected final Logger      logger                  = LoggerFactory.getLogger(this.getClass());
@@ -159,11 +163,10 @@ public abstract class AbstractMysqlEventParser extends AbstractEventParser {
 
     public void setTsdbSpringXml(String tsdbSpringXml) {
         this.tsdbSpringXml = tsdbSpringXml;
-        if (this.enableTsdb) {
-            if (tableMetaTSDB == null) {
-                // 初始化
-                tableMetaTSDB = TableMetaTSDBBuilder.build(destination, tsdbSpringXml);
-            }
+
+        if (tableMetaTSDB == null) {
+            // 初始化
+            tableMetaTSDB = TableMetaTSDBBuilder.build(destination, tsdbSpringXml);
         }
     }
 

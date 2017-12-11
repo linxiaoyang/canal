@@ -101,8 +101,7 @@ public class MysqlConnector {
                     MysqlUpdateExecutor executor = new MysqlUpdateExecutor(connector);
                     executor.update("KILL CONNECTION " + connectionId);
                 } catch (Exception e) {
-                    // 忽略具体异常
-                    logger.info("KILL DUMP " + connectionId + " failure", e);
+                    throw new IOException("KILL DUMP " + connectionId + " failure", e);
                 } finally {
                     if (connector != null) {
                         connector.disconnect();

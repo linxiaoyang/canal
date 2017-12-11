@@ -36,56 +36,58 @@ import com.alibaba.otter.canal.sink.exception.CanalSinkException;
 
 /**
  * 抽象的EventParser, 最大化共用mysql/oracle版本的实现
- * 
+ *
+ * TODO 这个基类特别重要，他是同mysql交互的基础，拉到binlog后放到本地存储
+ *
  * @author jianghang 2013-1-20 下午08:10:25
  * @version 1.0.0
  */
 public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle implements CanalEventParser<EVENT> {
 
-    protected final Logger                           logger                     = LoggerFactory.getLogger(this.getClass());
+    protected final Logger logger = LoggerFactory.getLogger(this.getClass());
 
-    protected CanalLogPositionManager                logPositionManager         = null;
-    protected CanalEventSink<List<CanalEntry.Entry>> eventSink                  = null;
-    protected CanalEventFilter                       eventFilter                = null;
-    protected CanalEventFilter                       eventBlackFilter           = null;
+    protected CanalLogPositionManager logPositionManager = null;
+    protected CanalEventSink<List<CanalEntry.Entry>> eventSink = null;
+    protected CanalEventFilter eventFilter = null;
+    protected CanalEventFilter eventBlackFilter = null;
 
-    private CanalAlarmHandler                        alarmHandler               = null;
+    private CanalAlarmHandler alarmHandler = null;
 
     // 统计参数
-    protected AtomicBoolean                          profilingEnabled           = new AtomicBoolean(false);                // profile开关参数
-    protected AtomicLong                             receivedEventCount         = new AtomicLong();
-    protected AtomicLong                             parsedEventCount           = new AtomicLong();
-    protected AtomicLong                             consumedEventCount         = new AtomicLong();
-    protected long                                   parsingInterval            = -1;
-    protected long                                   processingInterval         = -1;
+    protected AtomicBoolean profilingEnabled = new AtomicBoolean(false);                // profile开关参数
+    protected AtomicLong receivedEventCount = new AtomicLong();
+    protected AtomicLong parsedEventCount = new AtomicLong();
+    protected AtomicLong consumedEventCount = new AtomicLong();
+    protected long parsingInterval = -1;
+    protected long processingInterval = -1;
 
     // 认证信息
-    protected volatile AuthenticationInfo            runningInfo;
-    protected String                                 destination;
+    protected volatile AuthenticationInfo runningInfo;
+    protected String destination;
 
     // binLogParser
-    protected BinlogParser                           binlogParser               = null;
+    protected BinlogParser binlogParser = null;
 
-    protected Thread                                 parseThread                = null;
+    protected Thread parseThread = null;
 
-    protected Thread.UncaughtExceptionHandler        handler                    = new Thread.UncaughtExceptionHandler() {
+    protected Thread.UncaughtExceptionHandler handler = new Thread.UncaughtExceptionHandler() {
 
-                                                                                    public void uncaughtException(Thread t,
-                                                                                                                  Throwable e) {
-                                                                                        logger.error("parse events has an error",
-                                                                                            e);
-                                                                                    }
-                                                                                };
+        public void uncaughtException(Thread t,
+                                      Throwable e) {
+            logger.error("parse events has an error",
+                    e);
+        }
+    };
 
-    protected EventTransactionBuffer                 transactionBuffer;
-    protected int                                    transactionSize            = 1024;
-    protected AtomicBoolean                          needTransactionPosition    = new AtomicBoolean(false);
-    protected long                                   lastEntryTime              = 0L;
-    protected volatile boolean                       detectingEnable            = true;                                    // 是否开启心跳检查
-    protected Integer                                detectingIntervalInSeconds = 3;                                       // 检测频率
-    protected volatile Timer                         timer;
-    protected TimerTask                              heartBeatTimerTask;
-    protected Throwable                              exception                  = null;
+    protected EventTransactionBuffer transactionBuffer;
+    protected int transactionSize = 1024;
+    protected AtomicBoolean needTransactionPosition = new AtomicBoolean(false);
+    protected long lastEntryTime = 0L;
+    protected volatile boolean detectingEnable = true;                                    // 是否开启心跳检查
+    protected Integer detectingIntervalInSeconds = 3;                                       // 检测频率
+    protected volatile Timer timer;
+    protected TimerTask heartBeatTimerTask;
+    protected Throwable exception = null;
 
     protected abstract BinlogParser buildParser();
 
@@ -109,11 +111,14 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
         }
     }
 
-    public AbstractEventParser(){
+    public AbstractEventParser() {
         // 初始化一下
         transactionBuffer = new EventTransactionBuffer(new TransactionFlushCallback() {
 
             public void flush(List<CanalEntry.Entry> transaction) throws InterruptedException {
+                /**
+                 *
+                 */
                 boolean successed = consumeTheEventAndProfilingIfNecessary(transaction);
                 if (!running) {
                     return;
@@ -131,6 +136,24 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
         });
     }
 
+
+    /**
+     * start()方法是实现了生命周期的启动方法，是被上层的组件调用的，parser组件的start方法应该是被instance组件调用的。该方法开始启动组件，接收binlog，并且解析处理它。该方法的流程是这样的。
+     * <p>
+     * 初始化并启动transactionBuffer组件。
+     * 构造binlogParser组件，并启动它。
+     * 开启新的线程并启动它。避免阻塞上级组件的启动。
+     * 开启循环，直到终止组件运行。判断标志是protected volatile boolean running = false。定义为volatile修饰的成员变量，让多线程可见。
+     * 构造erosa连接。
+     * 启动一个心跳线程。用Timer实现。会定期消费一个事件类型为EntryType.HEARTBEAT的事件。应该是告知下游组件，上有组件还活着。
+     * dump数据库复制日志前的准备处理。
+     * erosa连接创建连接。
+     * 查找日志起始位置。
+     * erosa连接重建连接。因为在找position过程中可能有状态，需要断开后重建
+     * 开始dump数据库复制日志。传入一个回调的SinkFunction匿名类对象。回调方法sink的实现就是解析dump到的日志事件，将其转化为Entry对象。并强Entry对象加入到缓冲区transactionBuffer中，并且记录当前日志位置和时间。
+     * 最后dump后的处理。关闭连接等事后处理。
+     * 若未停止运行，则再次进入第一步。
+     */
     public void start() {
         super.start();
         MDC.put("destination", destination);
@@ -169,7 +192,7 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
 
                         if (!processTableMeta(startPosition)) {
                             throw new CanalParseException("can't find init table meta for " + destination
-                                                          + " with position : " + startPosition);
+                                    + " with position : " + startPosition);
                         }
                         logger.info("find start position : {}", startPosition.toString());
                         // 重新链接，因为在找position过程中可能有状态，需要断开后重建
@@ -189,6 +212,9 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
 
                                     if (entry != null) {
                                         exception = null; // 有正常数据流过，清空exception
+                                        /**
+                                         * 把数据放入transactionBuffer
+                                         */
                                         transactionBuffer.add(entry);
                                         // 记录一下对应的positions
                                         this.lastPosition = buildLastPosition(entry);
@@ -204,9 +230,9 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
                                     }
                                     // 记录一下，出错的位点信息
                                     processSinkError(e,
-                                        this.lastPosition,
-                                        startPosition.getJournalName(),
-                                        startPosition.getPosition());
+                                            this.lastPosition,
+                                            startPosition.getJournalName(),
+                                            startPosition.getPosition());
                                     throw new CanalParseException(e); // 继续抛出异常，让上层统一感知
                                 }
                             }
@@ -217,9 +243,12 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
                         if (StringUtils.isEmpty(startPosition.getJournalName()) && startPosition.getTimestamp() != null) {
                             erosaConnection.dump(startPosition.getTimestamp(), sinkHandler);
                         } else {
+                            /**
+                             * dump数据
+                             */
                             erosaConnection.dump(startPosition.getJournalName(),
-                                startPosition.getPosition(),
-                                sinkHandler);
+                                    startPosition.getPosition(),
+                                    sinkHandler);
                         }
 
                     } catch (TableIdNotFoundException e) {
@@ -228,18 +257,18 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
                         // Event时间没解析过
                         needTransactionPosition.compareAndSet(false, true);
                         logger.error(String.format("dump address %s has an error, retrying. caused by ",
-                            runningInfo.getAddress().toString()), e);
+                                runningInfo.getAddress().toString()), e);
                     } catch (Throwable e) {
                         processDumpError(e);
                         exception = e;
                         if (!running) {
                             if (!(e instanceof java.nio.channels.ClosedByInterruptException || e.getCause() instanceof java.nio.channels.ClosedByInterruptException)) {
                                 throw new CanalParseException(String.format("dump address %s has an error, retrying. ",
-                                    runningInfo.getAddress().toString()), e);
+                                        runningInfo.getAddress().toString()), e);
                             }
                         } else {
                             logger.error(String.format("dump address %s has an error, retrying. caused by ",
-                                runningInfo.getAddress().toString()), e);
+                                    runningInfo.getAddress().toString()), e);
                             sendAlarm(destination, ExceptionUtils.getFullStackTrace(e));
                         }
                     } finally {
@@ -254,12 +283,12 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
                         } catch (IOException e1) {
                             if (!running) {
                                 throw new CanalParseException(String.format("disconnect address %s has an error, retrying. ",
-                                    runningInfo.getAddress().toString()),
-                                    e1);
+                                        runningInfo.getAddress().toString()),
+                                        e1);
                             } else {
                                 logger.error("disconnect address {} has an error, retrying., caused by ",
-                                    runningInfo.getAddress().toString(),
-                                    e1);
+                                        runningInfo.getAddress().toString(),
+                                        e1);
                             }
                         }
                     }
@@ -282,8 +311,8 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
 
         parseThread.setUncaughtExceptionHandler(handler);
         parseThread.setName(String.format("destination = %s , address = %s , EventParser",
-            destination,
-            runningInfo == null ? null : runningInfo.getAddress()));
+                destination,
+                runningInfo == null ? null : runningInfo.getAddress()));
         parseThread.start();
     }
 
@@ -308,7 +337,7 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
     }
 
     protected boolean consumeTheEventAndProfilingIfNecessary(List<CanalEntry.Entry> entrys) throws CanalSinkException,
-                                                                                           InterruptedException {
+            InterruptedException {
         long startTs = -1;
         boolean enabled = getProfilingEnabled();
         if (enabled) {
@@ -378,12 +407,12 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
     protected void processSinkError(Throwable e, LogPosition lastPosition, String startBinlogFile, long startPosition) {
         if (lastPosition != null) {
             logger.warn(String.format("ERROR ## parse this event has an error , last position : [%s]",
-                lastPosition.getPostion()),
-                e);
+                    lastPosition.getPostion()),
+                    e);
         } else {
             logger.warn(String.format("ERROR ## parse this event has an error , last position : [%s,%s]",
-                startBinlogFile,
-                startPosition), e);
+                    startBinlogFile,
+                    startPosition), e);
         }
     }
 
@@ -395,8 +424,8 @@ public abstract class AbstractEventParser<EVENT> extends AbstractCanalLifeCycle 
         lastEntryTime = 0L; // 初始化
         if (timer == null) {// lazy初始化一下
             String name = String.format("destination = %s , address = %s , HeartBeatTimeTask",
-                destination,
-                runningInfo == null ? null : runningInfo.getAddress().toString());
+                    destination,
+                    runningInfo == null ? null : runningInfo.getAddress().toString());
             synchronized (AbstractEventParser.class) {
                 // synchronized (MysqlEventParser.class) {
                 // why use MysqlEventParser.class, u know, MysqlEventParser is

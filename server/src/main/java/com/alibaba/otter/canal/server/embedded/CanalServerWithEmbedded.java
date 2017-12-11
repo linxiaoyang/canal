@@ -288,7 +288,7 @@ public class CanalServerWithEmbedded extends AbstractCanalLifeCycle implements C
             if (positionRanges != null) { // 存在流数据
                 events = getEvents(canalInstance.getEventStore(), positionRanges.getStart(), batchSize, timeout, unit);
             } else {// ack后第一次获取
-                Position start = canalInstance.getMetaManager().getCursor(clientIdentity);
+                Position start = (LogPosition)canalInstance.getMetaManager().getCursor(clientIdentity);
                 if (start == null) { // 第一次，还没有过ack记录，则获取当前store中的第一条
                     start = canalInstance.getEventStore().getFirstPosition();
                 }

@@ -3,7 +3,7 @@ package com.alibaba.otter.canal.parse;
 import com.alibaba.otter.canal.common.CanalLifeCycle;
 
 /**
- * 数据复制控制器
+ * 数据复制控制器,核心的数据复制接口
  * 
  * @author jianghang 2012-6-21 下午04:03:25
  * @version 1.0.0
